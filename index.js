@@ -153,12 +153,13 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
   const tempDir = path.dirname(inputPath);
   const timestamp = Date.now();
   
-  // Step 1: Convert PDF to JSON to remove actual content
+  // Step 1: Use qpdf to create a JSON representation of the PDF
   const jsonPath = `${tempDir}/pdf_${timestamp}.json`;
   const contentRemovedPath = `${tempDir}/content_removed_${timestamp}.pdf`;
   
-  console.log('Converting PDF to JSON...');
-  exec(`qpdf ${inputPath} --json-output=${jsonPath}`, (error, stdout, stderr) => {
+  console.log('Creating PDF structure in JSON format...');
+  // CORRECTED: Use proper JSON output version
+  exec(`qpdf ${inputPath} --json=2 > ${jsonPath}`, (error, stdout, stderr) => {
     if (error) {
       console.error('QPDF JSON conversion error:', error);
       return res.status(500).json({ error: error.message, details: stderr });
@@ -205,7 +206,8 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
       fs.writeFileSync(jsonPath, JSON.stringify(pdfData));
       
       // Convert back to PDF
-      exec(`qpdf --json-input=${jsonPath} ${contentRemovedPath}`, (error, stdout, stderr) => {
+      // CORRECTED: Use the proper approach for JSON input
+      exec(`qpdf --json-input < ${jsonPath} ${contentRemovedPath}`, (error, stdout, stderr) => {
         if (error) {
           console.error('QPDF conversion error:', error);
           return res.status(500).json({ error: error.message });
