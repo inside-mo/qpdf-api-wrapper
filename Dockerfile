@@ -1,28 +1,17 @@
 FROM node:18
 
-# Install qpdf, pdftk and ghostscript for PDF manipulation
+# Install required tools
 RUN apt-get update && \
-    apt-get install -y qpdf pdftk ghostscript && \
+    apt-get install -y qpdf ghostscript imagemagick && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Create app directory
+# ImageMagick security policy might prevent PDF operations, fix it
+RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml
+
 WORKDIR /app
-
-# Create uploads directory with permissions
 RUN mkdir -p /app/uploads && chmod 777 /app/uploads
-
-# Copy package files
-COPY package.json ./
-
-# Install dependencies
-RUN npm install
-
-# Copy source code
 COPY . .
-
-# Expose port
+RUN npm install
 EXPOSE 1999
-
-# Start the app
 CMD ["npm", "start"]
