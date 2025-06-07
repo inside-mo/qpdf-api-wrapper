@@ -155,94 +155,161 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
     const timestamp = Date.now();
     const outputPath = `${tempDir}/redacted_${timestamp}.pdf`;
     
-    console.log('Processing PDF for redaction...');
+    // Step 1: First use qpdf to remove metadata and linearize the PDF
+    const cleanPath = `${tempDir}/clean_${timestamp}.pdf`;
+    console.log('Removing metadata and linearizing...');
+    execSync(`qpdf --remove-restrictions --linearize ${inputPath} ${cleanPath}`);
     
-    // Step 1: Uncompress the PDF with pdftk for easier text replacement
-    const uncompressedPath = `${tempDir}/uncomp_${timestamp}.pdf`;
-    console.log('Uncompressing PDF...');
-    execSync(`pdftk ${inputPath} output ${uncompressedPath} uncompress`);
-    
-    // Step 2: Read the uncompressed PDF
-    let pdfContent = fs.readFileSync(uncompressedPath, 'utf8');
-    
-    // Step 3: Replace text content with spaces (first layer of redaction)
-    console.log('Replacing text content...');
+    // Step 2: Apply redaction using a more thorough method - using Ghostscript
+    // Group by page
+    const pageGroups = {};
     locations.forEach(loc => {
-      if (loc.text) {
-        // Escape special regex characters in the text
-        const escapedText = loc.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        // Replace with equivalent number of spaces
-        pdfContent = pdfContent.replace(
-          new RegExp(escapedText, 'g'), 
-          ' '.repeat(loc.text.length)
-        );
-      }
+      const page = loc.page || 0;
+      if (!pageGroups[page]) pageGroups[page] = [];
+      pageGroups[page].push(loc);
     });
     
-    // Step 4: Write the modified PDF content
-    const modifiedPath = `${tempDir}/modified_${timestamp}.pdf`;
-    fs.writeFileSync(modifiedPath, pdfContent);
-    
-    // Step 5: Recompress the PDF
-    const recompressedPath = `${tempDir}/recomp_${timestamp}.pdf`;
-    console.log('Recompressing PDF...');
-    execSync(`pdftk ${modifiedPath} output ${recompressedPath} compress`);
-    
-    // Step 6: Create a PDF with black rectangles using Ghostscript
-    // Group redactions by page
-    const pageRedactions = {};
-    locations.forEach(loc => {
-      const page = parseInt(loc.page) + 1; // Convert to 1-indexed for Ghostscript
-      if (!pageRedactions[page]) {
-        pageRedactions[page] = [];
-      }
-      pageRedactions[page].push(loc);
-    });
-    
-    // Create a PostScript file for each page with redaction rectangles
+    // Generate separate PS files for each page
     const psFiles = [];
     
-    console.log('Creating redaction overlays...');
-    for (const page in pageRedactions) {
-      const psPath = `${tempDir}/redact_${timestamp}_p${page}.ps`;
-      let psContent = '%!PS-Adobe-3.0\n';
+    for (const [page, locs] of Object.entries(pageGroups)) {
+      const psFile = `${tempDir}/redact_p${page}_${timestamp}.ps`;
       
-      pageRedactions[page].forEach(loc => {
-        // Draw a filled black rectangle
+      // Start with PS header
+      let psContent = `%!PS-Adobe-3.0
+%%Title: Redaction Layer
+%%Pages: 1
+%%PageOrder: Ascend
+%%BoundingBox: 0 0 596 842
+%%EndComments
+%%Page: 1 1
+`;
+
+      // Add black rectangles for each location
+      locs.forEach(loc => {
+        const { x0, y0, x1, y1 } = loc;
+        
+        // Convert PDF coordinates to PostScript coordinates (might need adjustment)
+        // PDF coordinates have origin at bottom-left, with y axis going up
+        // In case page_height is not provided, estimate using standard A4 height
+        const pageHeight = loc.page_height || 842;
+        const y0PS = pageHeight - y1;
+        const y1PS = pageHeight - y0;
+        
+        // Add redaction rectangle with some padding
         psContent += `
-          0 0 0 setrgbcolor
-          ${loc.x0} ${loc.y0} moveto
-          ${loc.x1} ${loc.y0} lineto
-          ${loc.x1} ${loc.y1} lineto
-          ${loc.x0} ${loc.y1} lineto
-          closepath
-          fill
-        `;
+1 0 0 setrgbcolor % Red for visibility during testing
+newpath
+${x0-2} ${y0PS-2} moveto
+${x1+2} ${y0PS-2} lineto
+${x1+2} ${y1PS+2} lineto
+${x0-2} ${y1PS+2} lineto
+closepath
+fill
+0 0 0 setrgbcolor % Black for final redaction
+newpath
+${x0-1} ${y0PS-1} moveto
+${x1+1} ${y0PS-1} lineto
+${x1+1} ${y1PS+1} lineto
+${x0-1} ${y1PS+1} lineto
+closepath
+fill
+`;
       });
       
-      fs.writeFileSync(psPath, psContent);
-      psFiles.push({ page, path: psPath });
+      // End PS file
+      psContent += `
+showpage
+%%EOF
+`;
+      
+      fs.writeFileSync(psFile, psContent);
+      psFiles.push({ page: parseInt(page), file: psFile });
     }
     
-    // Step 7: Apply the black rectangles to each page using Ghostscript
-    const overlayPath = `${tempDir}/overlay_${timestamp}.pdf`;
+    // Step 3: Create overlay PDFs for each page with Ghostscript
+    const overlays = [];
     
-    if (psFiles.length > 0) {
-      console.log('Applying redaction overlays...');
-      // Create a PDF with just the black rectangles
-      const gsCommand = `gs -q -dNOPAUSE -dBATCH -sDEVICE=pdfwrite -sOutputFile=${overlayPath} ${psFiles.map(f => f.path).join(' ')}`;
-      execSync(gsCommand);
+    for (const pageInfo of psFiles) {
+      const overlayPdf = `${tempDir}/overlay_p${pageInfo.page}_${timestamp}.pdf`;
+      console.log(`Creating redaction overlay for page ${pageInfo.page+1}...`);
       
-      // Step 8: Merge the overlay with the text-redacted PDF
-      console.log('Merging redaction layers...');
-      execSync(`pdftk ${recompressedPath} multistamp ${overlayPath} output ${outputPath}`);
-    } else {
-      // If no overlays, just use the recompressed file
-      fs.copyFileSync(recompressedPath, outputPath);
+      try {
+        execSync(`gs -q -sDEVICE=pdfwrite -dBATCH -dNOPAUSE -dNOSAFER -sOutputFile=${overlayPdf} ${pageInfo.file}`);
+        overlays.push({ page: pageInfo.page, file: overlayPdf });
+      } catch (error) {
+        console.error(`Error creating overlay for page ${pageInfo.page+1}:`, error);
+        throw new Error(`Failed to create overlay for page ${pageInfo.page+1}: ${error.message}`);
+      }
+    }
+    
+    // Step 4: Rasterize the pages containing sensitive information, then re-embed them
+    // This is the key to truly removing the underlying text
+    // Determine which pages need rasterization
+    const pagesToRasterize = [...new Set(locations.map(loc => loc.page))];
+    
+    // Create a directory to store rasterized pages
+    const rasterDir = `${tempDir}/raster_${timestamp}`;
+    fs.mkdirSync(rasterDir, { recursive: true });
+    
+    // Extract and rasterize individual pages
+    for (const pageNum of pagesToRasterize) {
+      console.log(`Processing page ${pageNum+1}...`);
+      
+      try {
+        // Extract the page
+        const singlePage = `${rasterDir}/page_${pageNum}.pdf`;
+        execSync(`pdftk ${cleanPath} cat ${pageNum+1} output ${singlePage}`);
+        
+        // Rasterize at high resolution (300 DPI)
+        const rasterPage = `${rasterDir}/raster_${pageNum}.pdf`;
+        execSync(`gs -q -sDEVICE=pdfwrite -dBATCH -dNOPAUSE -dNOSAFER -dPDFSETTINGS=/prepress -r300 -sOutputFile=${rasterPage} ${singlePage}`);
+        
+        // Apply redaction overlay
+        const redactedPage = `${rasterDir}/redacted_${pageNum}.pdf`;
+        const overlay = overlays.find(o => o.page === pageNum)?.file;
+        
+        if (overlay) {
+          execSync(`pdftk ${rasterPage} stamp ${overlay} output ${redactedPage}`);
+        } else {
+          fs.copyFileSync(rasterPage, redactedPage);
+        }
+      } catch (error) {
+        console.error(`Error processing page ${pageNum+1}:`, error);
+        throw new Error(`Failed to process page ${pageNum+1}: ${error.message}`);
+      }
+    }
+    
+    // Step 5: Create a list of replacement pages
+    // Build pdftk command to reassemble the PDF with redacted pages
+    let pdftkCmd = `pdftk ${cleanPath} `;
+    
+    pagesToRasterize.forEach(pageNum => {
+      pdftkCmd += `update_page ${pageNum+1} ${rasterDir}/redacted_${pageNum}.pdf `;
+    });
+    
+    pdftkCmd += `output ${outputPath}`;
+    
+    console.log('Reassembling PDF with redacted pages...');
+    try {
+      execSync(pdftkCmd);
+    } catch (error) {
+      console.error('Error reassembling PDF:', error);
+      throw new Error(`Failed to reassemble PDF: ${error.message}`);
+    }
+    
+    // Step 6: Final pass to ensure metadata is removed
+    const finalPath = `${tempDir}/final_redacted_${timestamp}.pdf`;
+    console.log('Final metadata removal...');
+    try {
+      execSync(`qpdf --remove-restrictions --linearize ${outputPath} ${finalPath}`);
+    } catch (error) {
+      console.error('Error during final metadata removal:', error);
+      throw new Error(`Failed during final metadata removal: ${error.message}`);
     }
     
     // Return the redacted PDF
-    res.download(outputPath, `redacted_${path.basename(req.file.originalname || 'document.pdf')}`, (err) => {
+    res.download(finalPath, `redacted_${path.basename(req.file.originalname || 'document.pdf')}`, (err) => {
       if (err) {
         console.error('Download error:', err);
       }
@@ -251,17 +318,22 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
       setTimeout(() => {
         try {
           fs.unlinkSync(inputPath);
-          fs.unlinkSync(uncompressedPath);
-          fs.unlinkSync(modifiedPath);
-          fs.unlinkSync(recompressedPath);
+          fs.unlinkSync(cleanPath);
           fs.unlinkSync(outputPath);
+          fs.unlinkSync(finalPath);
           
-          psFiles.forEach(f => {
-            fs.unlinkSync(f.path);
+          // Clean up overlay files
+          psFiles.forEach(p => {
+            if (fs.existsSync(p.file)) fs.unlinkSync(p.file);
           });
           
-          if (fs.existsSync(overlayPath)) {
-            fs.unlinkSync(overlayPath);
+          overlays.forEach(o => {
+            if (fs.existsSync(o.file)) fs.unlinkSync(o.file);
+          });
+          
+          // Clean up rasterized pages
+          if (fs.existsSync(rasterDir)) {
+            fs.rmSync(rasterDir, { recursive: true, force: true });
           }
         } catch (e) {
           console.error('Cleanup error:', e);
@@ -307,7 +379,7 @@ app.get('/commands', (req, res) => {
         description: 'Perform LLM-proof redaction on specific areas in a PDF',
         parameters: {
           file: 'PDF file (multipart/form-data)',
-          locations: 'JSON array of areas to redact with format: [{page, text, x0, y0, x1, y1}]'
+          locations: 'JSON array of areas to redact with format: [{page, text, x0, y0, x1, y1, page_height, page_width}]'
         }
       }
     ]
