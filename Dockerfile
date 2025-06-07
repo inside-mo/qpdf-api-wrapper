@@ -1,5 +1,8 @@
 FROM node:18
-RUN apt-get update && apt-get install -y qpdf pdftk poppler-utils
+
+# Install qpdf, pdftk and ghostscript for PDF manipulation
+RUN apt-get update && apt-get install -y qpdf pdftk ghostscript
+
 WORKDIR /app
 RUN mkdir -p /app/uploads && chmod 777 /app/uploads
 COPY . .
