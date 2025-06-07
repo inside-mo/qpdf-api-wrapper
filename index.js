@@ -149,6 +149,9 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
     return res.status(400).json({ error: 'No redaction areas provided' });
   }
   
+  // Get the quality parameter (default to 600 DPI for high quality)
+  const quality = req.body.quality ? parseInt(req.body.quality) : 600;
+  
   try {
     const inputPath = req.file.path;
     const tempDir = path.dirname(inputPath);
@@ -173,10 +176,10 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
     const imageDir = `${tempDir}/images_${timestamp}`;
     fs.mkdirSync(imageDir, { recursive: true });
     
-    console.log("Converting PDF to images...");
+    console.log(`Converting PDF to high-resolution (${quality} DPI) images...`);
     try {
-      // Convert the PDF to high-res images
-      execSync(`gs -dSAFER -dBATCH -dNOPAUSE -sDEVICE=png16m -r300 -dTextAlphaBits=4 -dGraphicsAlphaBits=4 -sOutputFile="${imageDir}/page-%03d.png" "${inputPath}"`);
+      // Convert the PDF to high-res images with antialiasing for better quality
+      execSync(`gs -dSAFER -dBATCH -dNOPAUSE -sDEVICE=png16m -r${quality} -dTextAlphaBits=4 -dGraphicsAlphaBits=4 -sOutputFile="${imageDir}/page-%03d.png" "${inputPath}"`);
       
       // Count the number of generated images
       const imageFiles = fs.readdirSync(imageDir).filter(file => file.startsWith('page-') && file.endsWith('.png'));
@@ -212,97 +215,21 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
         execSync(redactCmd);
       }
       
-      // Combine images back into a PDF
+      // Combine images back into a PDF with high quality settings
       console.log("Combining images back into PDF...");
       const redactedPdf = `${tempDir}/redacted_combined_${timestamp}.pdf`;
-      execSync(`convert "${imageDir}/page-*.png" "${redactedPdf}"`);
+      
+      // Use ImageMagick with quality settings
+      execSync(`convert -density ${quality} -quality 100 "${imageDir}/page-*.png" "${redactedPdf}"`);
       
       // Final cleanup and metadata removal
       console.log("Finalizing PDF...");
       execSync(`qpdf --remove-restrictions --linearize "${redactedPdf}" "${outputPath}"`);
       
-    } catch (error) {
-      console.error("Error during image processing:", error);
-      throw new Error(`Image processing failed: ${error.message}`);
-    }
-    
-    // Return the redacted PDF
-    res.download(outputPath, `redacted_${path.basename(req.file.originalname || 'document.pdf')}`, (err) => {
-      if (err) {
-        console.error('Download error:', err);
-      }
+      // Optimize the final PDF (optional)
+      console.log("Optimizing final PDF...");
+      const optimizedPath = `${tempDir}/optimized_${timestamp}.pdf`;
+      execSync(`gs -dSAFER -dBATCH -dNOPAUSE -sDEVICE=pdfwrite -dPDFSETTINGS=/prepress -dCompatibilityLevel=1.7 -sOutputFile="${optimizedPath}" "${outputPath}"`);
       
-      // Clean up temporary files
-      setTimeout(() => {
-        try {
-          fs.unlinkSync(inputPath);
-          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-          
-          // Remove the image directory and all its contents
-          if (fs.existsSync(imageDir)) {
-            fs.rmSync(imageDir, { recursive: true, force: true });
-          }
-          
-        } catch (e) {
-          console.error('Cleanup error:', e);
-        }
-      }, 1000);
-    });
-    
-  } catch (error) {
-    console.error('Redaction error:', error);
-    return res.status(500).json({ 
-      error: 'Redaction failed', 
-      details: error.message,
-      stack: error.stack
-    });
-  }
-});
-
-// List supported commands
-app.get('/commands', (req, res) => {
-  res.json({
-    endpoints: [
-      {
-        path: '/remove-metadata',
-        method: 'POST',
-        description: 'Remove metadata from PDF',
-        parameters: {
-          file: 'PDF file (multipart/form-data)'
-        }
-      },
-      {
-        path: '/replace-content',
-        method: 'POST',
-        description: 'Replace content in PDF',
-        parameters: {
-          file: 'PDF file (multipart/form-data)',
-          pageNumber: 'Page number to modify',
-          searchText: 'Text to search for',
-          replaceText: 'Text to replace with'
-        }
-      },
-      {
-        path: '/redact-areas',
-        method: 'POST',
-        description: 'Perform LLM-proof redaction on specific areas in a PDF',
-        parameters: {
-          file: 'PDF file (multipart/form-data)',
-          locations: 'JSON array of areas to redact with format: [{page, text, x0, y0, x1, y1}]'
-        }
-      }
-    ]
-  });
-});
-
-// Start server
-const PORT = process.env.PORT || 1999;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log('Available endpoints:');
-  console.log('- GET / - Health check');
-  console.log('- GET /commands - List available commands');
-  console.log('- POST /remove-metadata - Remove metadata from PDF');
-  console.log('- POST /replace-content - Replace content in PDF');
-  console.log('- POST /redact-areas - LLM-proof redaction for PDFs');
-});
+      // Use the optimized version if it exists and is not too small
+      if (fs.existsSync(optimizedPath))
