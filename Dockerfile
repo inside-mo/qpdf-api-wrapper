@@ -1,5 +1,5 @@
 FROM node:18
-RUN apt-get update && apt-get install -y qpdf
+RUN apt-get update && apt-get install -y qpdf pdftk poppler-utils
 WORKDIR /app
 RUN mkdir -p /app/uploads && chmod 777 /app/uploads
 COPY . .
