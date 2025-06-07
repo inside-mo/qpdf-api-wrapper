@@ -232,4 +232,102 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
       execSync(`gs -dSAFER -dBATCH -dNOPAUSE -sDEVICE=pdfwrite -dPDFSETTINGS=/prepress -dCompatibilityLevel=1.7 -sOutputFile="${optimizedPath}" "${outputPath}"`);
       
       // Use the optimized version if it exists and is not too small
-      if (fs.existsSync(optimizedPath))
+      if (fs.existsSync(optimizedPath)) {
+        const origStat = fs.statSync(outputPath);
+        const optStat = fs.statSync(optimizedPath);
+        
+        // Only use optimized if it's not significantly smaller (which might indicate quality loss)
+        if (optStat.size > 0.5 * origStat.size) {
+          fs.renameSync(optimizedPath, outputPath);
+        } else {
+          console.log("Optimized version was too small, using original rasterized version");
+          fs.unlinkSync(optimizedPath);
+        }
+      }
+      
+    } catch (error) {
+      console.error("Error during image processing:", error);
+      throw new Error(`Image processing failed: ${error.message}`);
+    }
+    
+    // Return the redacted PDF
+    res.download(outputPath, `redacted_${path.basename(req.file.originalname || 'document.pdf')}`, (err) => {
+      if (err) {
+        console.error('Download error:', err);
+      }
+      
+      // Clean up temporary files
+      setTimeout(() => {
+        try {
+          fs.unlinkSync(inputPath);
+          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+          
+          // Remove the image directory and all its contents
+          if (fs.existsSync(imageDir)) {
+            fs.rmSync(imageDir, { recursive: true, force: true });
+          }
+          
+        } catch (e) {
+          console.error('Cleanup error:', e);
+        }
+      }, 1000);
+    });
+    
+  } catch (error) {
+    console.error('Redaction error:', error);
+    return res.status(500).json({ 
+      error: 'Redaction failed', 
+      details: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// List supported commands
+app.get('/commands', (req, res) => {
+  res.json({
+    endpoints: [
+      {
+        path: '/remove-metadata',
+        method: 'POST',
+        description: 'Remove metadata from PDF',
+        parameters: {
+          file: 'PDF file (multipart/form-data)'
+        }
+      },
+      {
+        path: '/replace-content',
+        method: 'POST',
+        description: 'Replace content in PDF',
+        parameters: {
+          file: 'PDF file (multipart/form-data)',
+          pageNumber: 'Page number to modify',
+          searchText: 'Text to search for',
+          replaceText: 'Text to replace with'
+        }
+      },
+      {
+        path: '/redact-areas',
+        method: 'POST',
+        description: 'Perform LLM-proof redaction on specific areas in a PDF',
+        parameters: {
+          file: 'PDF file (multipart/form-data)',
+          locations: 'JSON array of areas to redact with format: [{page, text, x0, y0, x1, y1}]',
+          quality: 'Optional: DPI quality for rendering (default: 600)'
+        }
+      }
+    ]
+  });
+});
+
+// Start server
+const PORT = process.env.PORT || 1999;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log('Available endpoints:');
+  console.log('- GET / - Health check');
+  console.log('- GET /commands - List available commands');
+  console.log('- POST /remove-metadata - Remove metadata from PDF');
+  console.log('- POST /replace-content - Replace content in PDF');
+  console.log('- POST /redact-areas - LLM-proof redaction for PDFs');
+});
