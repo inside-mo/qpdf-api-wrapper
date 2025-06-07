@@ -153,112 +153,47 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
   const tempDir = path.dirname(inputPath);
   const timestamp = Date.now();
   
-  // Step 1: Use qpdf to create a JSON representation of the PDF
-  const jsonPath = `${tempDir}/pdf_${timestamp}.json`;
-  const contentRemovedPath = `${tempDir}/content_removed_${timestamp}.pdf`;
+  // Skip the JSON conversion step for now and work directly with the PDF
+  // We'll use a simpler approach focusing on the overlay functionality
   
-  console.log('Creating PDF structure in JSON format...');
-  // CORRECTED: Use proper JSON output version
-  exec(`qpdf ${inputPath} --json=2 > ${jsonPath}`, (error, stdout, stderr) => {
+  // Create redaction overlay with black rectangles
+  console.log('Creating redaction overlay with black rectangles...');
+  const redactionsPath = `${tempDir}/redactions_${timestamp}.txt`;
+  
+  const redactionsContent = locations.map(loc => {
+    // Format: "page x1 y1 x2 y2 [r g b]"
+    // QPDF page numbers are 1-indexed
+    return `${parseInt(loc.page) + 1} ${loc.x0} ${loc.y0} ${loc.x1} ${loc.y1} 0 0 0`;
+  }).join('\n');
+  
+  fs.writeFileSync(redactionsPath, redactionsContent);
+  
+  // Apply redaction overlay
+  const outputPath = `${tempDir}/redacted_${timestamp}.pdf`;
+  
+  exec(`qpdf ${inputPath} --overlay-file=${redactionsPath} --overlay-rectangle-format=page,x1,y1,x2,y2,r,g,b -- ${outputPath}`, (error, stdout, stderr) => {
     if (error) {
-      console.error('QPDF JSON conversion error:', error);
-      return res.status(500).json({ error: error.message, details: stderr });
-    }
-    
-    // Step 2: Modify JSON to remove sensitive text content
-    console.log('Redacting content from PDF structure...');
-    try {
-      const pdfData = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-      
-      // Group locations by page
-      const locationsByPage = {};
-      locations.forEach(loc => {
-        if (!locationsByPage[loc.page]) {
-          locationsByPage[loc.page] = [];
-        }
-        locationsByPage[loc.page].push(loc);
-      });
-      
-      // This is a simplified approach - in production you'd need more precise content manipulation
-      for (const pageIdx in locationsByPage) {
-        const pageLocs = locationsByPage[pageIdx];
-        const pageData = pdfData.pages[pageIdx];
-        
-        if (pageData && pageData.contents) {
-          pageData.contents.forEach(content => {
-            if (content.stream) {
-              // For each location on this page, replace text with spaces
-              pageLocs.forEach(loc => {
-                const text = loc.text;
-                if (content.stream.includes(text)) {
-                  content.stream = content.stream.replace(
-                    new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), 
-                    ' '.repeat(text.length)
-                  );
-                }
-              });
-            }
-          });
-        }
-      }
-      
-      // Save modified JSON
-      fs.writeFileSync(jsonPath, JSON.stringify(pdfData));
-      
-      // Convert back to PDF
-      // CORRECTED: Use the proper approach for JSON input
-      exec(`qpdf --json-input < ${jsonPath} ${contentRemovedPath}`, (error, stdout, stderr) => {
-        if (error) {
-          console.error('QPDF conversion error:', error);
-          return res.status(500).json({ error: error.message });
-        }
-        
-        // Step 3: Create redaction overlay with black rectangles
-        console.log('Creating redaction overlay...');
-        const redactionsPath = `${tempDir}/redactions_${timestamp}.txt`;
-        
-        const redactionsContent = locations.map(loc => {
-          // Format: "page x1 y1 x2 y2 [r g b]"
-          // QPDF page numbers are 1-indexed
-          return `${parseInt(loc.page) + 1} ${loc.x0} ${loc.y0} ${loc.x1} ${loc.y1} 0 0 0`;
-        }).join('\n');
-        
-        fs.writeFileSync(redactionsPath, redactionsContent);
-        
-        // Step 4: Apply redaction overlay
-        const outputPath = `${tempDir}/redacted_${timestamp}.pdf`;
-        
-        exec(`qpdf ${contentRemovedPath} --overlay-file=${redactionsPath} --overlay-rectangle-format=page,x1,y1,x2,y2,r,g,b -- ${outputPath}`, (error, stdout, stderr) => {
-          if (error) {
-            console.error('QPDF overlay error:', error);
-            return res.status(500).json({ error: error.message });
-          }
-          
-          // Return the redacted PDF
-          res.download(outputPath, `redacted_${path.basename(req.file.originalname || 'document.pdf')}`, (err) => {
-            if (err) {
-              console.error('Download error:', err);
-            }
-            
-            // Clean up temporary files
-            setTimeout(() => {
-              try {
-                fs.unlinkSync(inputPath);
-                fs.unlinkSync(jsonPath);
-                fs.unlinkSync(contentRemovedPath);
-                fs.unlinkSync(redactionsPath);
-                fs.unlinkSync(outputPath);
-              } catch (e) {
-                console.error('Cleanup error:', e);
-              }
-            }, 1000);
-          });
-        });
-      });
-    } catch (error) {
-      console.error('JSON processing error:', error);
+      console.error('QPDF overlay error:', error);
       return res.status(500).json({ error: error.message });
     }
+    
+    // Return the redacted PDF
+    res.download(outputPath, `redacted_${path.basename(req.file.originalname || 'document.pdf')}`, (err) => {
+      if (err) {
+        console.error('Download error:', err);
+      }
+      
+      // Clean up temporary files
+      setTimeout(() => {
+        try {
+          fs.unlinkSync(inputPath);
+          fs.unlinkSync(redactionsPath);
+          fs.unlinkSync(outputPath);
+        } catch (e) {
+          console.error('Cleanup error:', e);
+        }
+      }, 1000);
+    });
   });
 });
 
@@ -288,7 +223,7 @@ app.get('/commands', (req, res) => {
       {
         path: '/redact-areas',
         method: 'POST',
-        description: 'Redact specific areas in a PDF (LLM-proof)',
+        description: 'Redact specific areas in a PDF with black rectangles',
         parameters: {
           file: 'PDF file (multipart/form-data)',
           locations: 'JSON array of areas to redact with format: [{page, text, x0, y0, x1, y1}]'
