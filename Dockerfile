@@ -1,18 +1,25 @@
-FROM python:3.9-slim
+FROM node:18
 
-# Install qpdf from the package repositories
-RUN apt-get update && apt-get install -y qpdf && rm -rf /var/lib/apt/lists/*
+# Install qpdf
+RUN apt-get update && apt-get install -y qpdf
 
+# Create app directory
 WORKDIR /app
 
-# Copy the requirements file and install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Create uploads directory with permissions
+RUN mkdir -p /app/uploads && chmod 777 /app/uploads
 
-# Copy your API code
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy source code
 COPY . .
 
-EXPOSE 8000
+# Expose port
+EXPOSE 1999
 
-# Run the API server using uvicorn
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1999"]
+# Start the app
+CMD ["npm", "start"]
