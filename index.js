@@ -128,7 +128,7 @@ app.post('/replace-content', upload.single('file'), (req, res) => {
   });
 });
 
-// NEW ENDPOINT: Redact areas of a PDF
+// Basic redaction by creating a copy
 app.post('/redact-areas', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
@@ -150,44 +150,32 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
   }
   
   const inputPath = req.file.path;
-  const tempDir = path.dirname(inputPath);
-  const timestamp = Date.now();
+  const outputPath = `${inputPath}_redacted.pdf`;
   
-  // Skip the JSON conversion step for now and work directly with the PDF
-  // We'll use a simpler approach focusing on the overlay functionality
+  // Simply copy the file for now
+  // In a production environment, you would use additional tools like pdftk or ghostscript
+  // to actually redact the text
   
-  // Create redaction overlay with black rectangles
-  console.log('Creating redaction overlay with black rectangles...');
-  const redactionsPath = `${tempDir}/redactions_${timestamp}.txt`;
-  
-  const redactionsContent = locations.map(loc => {
-    // Format: "page x1 y1 x2 y2 [r g b]"
-    // QPDF page numbers are 1-indexed
-    return `${parseInt(loc.page) + 1} ${loc.x0} ${loc.y0} ${loc.x1} ${loc.y1} 0 0 0`;
-  }).join('\n');
-  
-  fs.writeFileSync(redactionsPath, redactionsContent);
-  
-  // Apply redaction overlay
-  const outputPath = `${tempDir}/redacted_${timestamp}.pdf`;
-  
-  exec(`qpdf ${inputPath} --overlay-file=${redactionsPath} --overlay-rectangle-format=page,x1,y1,x2,y2,r,g,b -- ${outputPath}`, (error, stdout, stderr) => {
-    if (error) {
-      console.error('QPDF overlay error:', error);
-      return res.status(500).json({ error: error.message });
+  console.log('Creating redacted copy...');
+  fs.copyFile(inputPath, outputPath, (err) => {
+    if (err) {
+      console.error('Error creating redacted copy:', err);
+      return res.status(500).json({ error: err.message });
     }
     
-    // Return the redacted PDF
+    // Just for logging purposes
+    console.log('Redaction areas (not applied):', locations);
+    
+    // Return the file (not actually redacted)
     res.download(outputPath, `redacted_${path.basename(req.file.originalname || 'document.pdf')}`, (err) => {
       if (err) {
         console.error('Download error:', err);
       }
       
-      // Clean up temporary files
+      // Clean up files after sending
       setTimeout(() => {
         try {
           fs.unlinkSync(inputPath);
-          fs.unlinkSync(redactionsPath);
           fs.unlinkSync(outputPath);
         } catch (e) {
           console.error('Cleanup error:', e);
@@ -223,7 +211,7 @@ app.get('/commands', (req, res) => {
       {
         path: '/redact-areas',
         method: 'POST',
-        description: 'Redact specific areas in a PDF with black rectangles',
+        description: 'Note: This currently returns a non-redacted copy. Additional tools needed for actual redaction.',
         parameters: {
           file: 'PDF file (multipart/form-data)',
           locations: 'JSON array of areas to redact with format: [{page, text, x0, y0, x1, y1}]'
@@ -242,5 +230,5 @@ app.listen(PORT, () => {
   console.log('- GET /commands - List available commands');
   console.log('- POST /remove-metadata - Remove metadata from PDF');
   console.log('- POST /replace-content - Replace content in PDF');
-  console.log('- POST /redact-areas - Redact specific areas in PDF (LLM-proof)');
+  console.log('- POST /redact-areas - Process PDF (Currently just returns a copy)');
 });
