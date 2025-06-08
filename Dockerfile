@@ -1,17 +1,27 @@
-FROM node:18
-
-# Install required tools
-RUN apt-get update && \
-    apt-get install -y qpdf ghostscript imagemagick && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# ImageMagick security policy might prevent PDF operations, fix it
-RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml
+FROM python:3.9-slim
 
 WORKDIR /app
-RUN mkdir -p /app/uploads && chmod 777 /app/uploads
+
+# Install git to clone the repository
+RUN apt-get update && apt-get install -y git && apt-get clean
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Clone the original OMRChecker repo
+RUN git clone https://github.com/Udayraj123/OMRChecker.git
+
+# Create a patched version of the problematic file
+RUN sed -i 's/from src.logger import logger/from .logger import logger/g' /app/OMRChecker/src/__init__.py
+
+# Copy your application files
 COPY . .
-RUN npm install
-EXPOSE 1999
-CMD ["npm", "start"]
+
+# Add both the current directory and the OMRChecker directory to PYTHONPATH
+ENV PYTHONPATH="${PYTHONPATH}:/app:/app/OMRChecker"
+
+# Expose port 8000 to match Coolify's default
+EXPOSE 8000
+
+CMD ["python", "app.py"]
