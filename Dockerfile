@@ -1,12 +1,10 @@
 FROM node:18
 
 # Install QPDF and other tools
-RUN apt-get update && \
-    apt-get install -y software-properties-common && \
-    add-apt-repository ppa:qpdf/qpdf && \
+RUN echo 'deb http://deb.debian.org/debian bullseye-backports main' > /etc/apt/sources.list.d/backports.list && \
     apt-get update && \
+    apt-get install -y -t bullseye-backports qpdf && \
     apt-get install -y \
-    qpdf \
     ghostscript \
     imagemagick \
     pdftk \
