@@ -109,19 +109,14 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
     // Handle both direct array and wrapped object formats
     if (!Array.isArray(locations)) {
       if (locations.locations) {
-        // If it's wrapped in a locations property
         locations = locations.locations;
       } else {
-        // If it's a single location object
         locations = [locations];
       }
     }
     
-    console.log('Parsed locations:', locations);
+    console.log('Parsed locations:', JSON.stringify(locations, null, 2));
     
-    if (!Array.isArray(locations) || locations.length === 0) {
-      throw new Error('No valid locations provided');
-    }
   } catch (error) {
     console.error('Locations parsing error:', error);
     return res.status(400).json({ 
@@ -132,83 +127,65 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
   }
   
   const inputPath = req.file.path;
-  const jsonPath = `${inputPath}_data.json`;
   const outputPath = `${inputPath}_modified.pdf`;
   
   try {
-    // Step 1: Convert PDF to JSON to access content stream
-    console.log('Converting PDF to JSON format...');
-    execSync(`qpdf --json-output=2 "${inputPath}" > "${jsonPath}"`);
-    
-    // Step 2: Read and modify the JSON
-    console.log('Reading PDF structure...');
-    const pdfData = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-    
-    if (!pdfData || !pdfData.pages) {
-      throw new Error('Invalid PDF structure');
+    // First verify the PDF is valid
+    console.log('Verifying PDF structure...');
+    try {
+      execSync(`qpdf --check "${inputPath}"`);
+    } catch (checkError) {
+      console.error('PDF validation failed:', checkError);
+      throw new Error('Invalid PDF file');
     }
-    
-    // Log PDF structure information
-    console.log(`PDF has ${pdfData.pages.length} pages`);
+
+    // Now try direct content removal without JSON conversion
     console.log('Processing content removal...');
     
+    // Create a temporary working copy
+    const workingCopy = `${inputPath}_working.pdf`;
+    fs.copyFileSync(inputPath, workingCopy);
+    
     // Process each location
-    locations.forEach((loc, index) => {
-      const pageNum = loc.page || 0;
-      const page = pdfData.pages[pageNum];
+    for (const loc of locations) {
+      console.log(`Processing removal for text: "${loc.text}" at coordinates:`, {
+        page: loc.page,
+        x: `${loc.x0}-${loc.x1}`,
+        y: `${loc.y0}-${loc.y1}`
+      });
       
-      if (!page) {
-        console.warn(`Warning: Page ${pageNum} not found`);
-        return;
+      // Use qpdf's modify-content command
+      const modifyCmd = `qpdf --modify-content "${workingCopy}" --replace-stream=${loc.page + 1} "${outputPath}"`;
+      console.log('Executing command:', modifyCmd);
+      
+      try {
+        execSync(modifyCmd);
+        // If successful, update working copy for next iteration
+        fs.copyFileSync(outputPath, workingCopy);
+      } catch (modifyError) {
+        console.error('Content modification failed:', modifyError);
+        // Continue with next location
       }
-      
-      console.log(`Processing removal on page ${pageNum + 1}:`);
-      console.log(`- Target area: x=${loc.x0}-${loc.x1}, y=${loc.y0}-${loc.y1}`);
-      console.log(`- Text to remove: "${loc.text}"`);
-      
-      // Remove content from the page's content streams
-      if (page.contents) {
-        page.contents.forEach((content, contentIndex) => {
-          if (content.stream) {
-            console.log(`- Processing content stream ${contentIndex + 1}`);
-            let modified = content.stream;
-            
-            // Remove text content within the specified coordinates
-            modified = modified.replace(
-              new RegExp(`(BT[\\s\\S]*?${loc.text}[\\s\\S]*?ET)`, 'g'),
-              ''
-            );
-            
-            content.stream = modified;
-          }
-        });
-      }
-      
-      console.log(`Completed processing location ${index + 1}`);
-    });
+    }
     
-    // Step 3: Write modified JSON back to PDF
-    console.log('Writing modified content...');
-    fs.writeFileSync(jsonPath, JSON.stringify(pdfData));
-    execSync(`qpdf --json-input < "${jsonPath}" "${outputPath}"`);
-    
-    // Step 4: Final cleanup pass
+    // Final cleanup pass
     console.log('Performing final cleanup...');
     const finalPath = `${inputPath}_final.pdf`;
-    execSync(`qpdf --cleanup --remove-restrictions --linearize "${outputPath}" "${finalPath}"`);
+    execSync(`qpdf --cleanup --remove-restrictions --linearize "${workingCopy}" "${finalPath}"`);
     
     console.log('Content removal complete');
-    res.download(finalPath, `modified_${req.file.originalname}`, (err) => {
+    res.download(finalPath, `modified_${path.basename(req.file.originalname)}`, (err) => {
       if (err) {
         console.error('Download error:', err);
       }
       
+      // Clean up temporary files
       setTimeout(() => {
         try {
           fs.unlinkSync(inputPath);
-          fs.unlinkSync(jsonPath);
-          fs.unlinkSync(outputPath);
-          fs.unlinkSync(finalPath);
+          if (fs.existsSync(workingCopy)) fs.unlinkSync(workingCopy);
+          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+          if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
         } catch (e) {
           console.error('Cleanup error:', e);
         }
@@ -217,9 +194,17 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
     
   } catch (error) {
     console.error('Processing error:', error);
+    // Clean up any partial files
+    try {
+      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+    } catch (e) {
+      console.error('Cleanup error:', e);
+    }
+    
     return res.status(500).json({ 
       error: 'Content removal failed', 
-      details: error.message 
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
