@@ -16,16 +16,6 @@ try {
 console.log(`Node process PATH: ${process.env.PATH}`);
 // ------------------------------------
 
-const { execSync } = require('child_process');
-try {
-  const qpdfPath = execSync('which qpdf').toString().trim();
-  const qpdfVersion = execSync('qpdf --version').toString().trim();
-  console.log('[QPDF] Detected at:', qpdfPath);
-  console.log('[QPDF] Version:', qpdfVersion);
-} catch (err) {
-  console.error('[QPDF] Not found:', err);
-}
-
 const app = express();
 
 // Setup multer for file uploads
@@ -37,6 +27,7 @@ const storage = multer.diskStorage({
     cb(null, Date.now() + path.extname(file.originalname));
   }
 });
+
 const upload = multer({ storage: storage });
 
 // Middleware
@@ -112,7 +103,6 @@ app.post('/remove-metadata', upload.single('file'), (req, res) => {
       if (err) {
         console.error('Download error:', err);
       }
-
       setTimeout(() => {
         try {
           fs.unlinkSync(inputPath);
@@ -134,14 +124,12 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
   let locations;
   try {
     console.log('Received locations data:', req.body.locations);
-
     // Parse the locations data
     if (typeof req.body.locations === 'string') {
       locations = JSON.parse(req.body.locations);
     } else {
       locations = req.body.locations;
     }
-
     // Handle both direct array and wrapped object formats
     if (!Array.isArray(locations)) {
       if (locations.locations) {
@@ -150,7 +138,6 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
         locations = [locations];
       }
     }
-
     console.log('Parsed locations:', JSON.stringify(locations, null, 2));
   } catch (error) {
     console.error('Locations parsing error:', error);
@@ -214,13 +201,12 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
     // Final cleanup and optimization
     console.log('Finalizing PDF...');
     execSync(`qpdf --linearize --compress-streams=y "${workingPath}" "${outputPath}"`);
-
     console.log('Content removal complete');
+
     res.download(outputPath, `modified_${path.basename(req.file.originalname)}`, (err) => {
       if (err) {
         console.error('Download error:', err);
       }
-
       // Clean up temporary files
       setTimeout(() => {
         try {
@@ -233,7 +219,6 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
         }
       }, 1000);
     });
-
   } catch (error) {
     console.error('Processing error:', error);
     return res.status(500).json({
@@ -251,20 +236,16 @@ app.get('/check', upload.single('file'), (req, res) => {
   }
 
   const inputPath = req.file.path;
-
   exec(`qpdf --check "${inputPath}"`, (error, stdout, stderr) => {
     const result = {
       stdout: stdout.trim(),
       stderr: stderr.trim(),
       status: error ? 'invalid' : 'valid'
     };
-
     if (error && error.code !== 2) { // qpdf uses exit code 2 for warnings
       result.error = error.message;
     }
-
     res.json(result);
-
     fs.unlink(inputPath, (err) => {
       if (err) console.error('Cleanup error:', err);
     });
