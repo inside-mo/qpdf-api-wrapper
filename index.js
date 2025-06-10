@@ -98,23 +98,36 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
   let locations;
   try {
     console.log('Received locations data:', req.body.locations);
-    locations = typeof req.body.locations === 'string' ? 
-      JSON.parse(req.body.locations) : req.body.locations;
-      
-    if (locations.locations) {
-      locations = locations.locations;
+    
+    // Parse the locations data
+    if (typeof req.body.locations === 'string') {
+      locations = JSON.parse(req.body.locations);
+    } else {
+      locations = req.body.locations;
     }
     
+    // Handle both direct array and wrapped object formats
     if (!Array.isArray(locations)) {
-      locations = [locations];
+      if (locations.locations) {
+        // If it's wrapped in a locations property
+        locations = locations.locations;
+      } else {
+        // If it's a single location object
+        locations = [locations];
+      }
     }
     
     console.log('Parsed locations:', locations);
+    
+    if (!Array.isArray(locations) || locations.length === 0) {
+      throw new Error('No valid locations provided');
+    }
   } catch (error) {
     console.error('Locations parsing error:', error);
     return res.status(400).json({ 
       error: 'Invalid locations format',
-      details: error.message
+      details: error.message,
+      received: req.body.locations
     });
   }
   
@@ -130,6 +143,10 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
     // Step 2: Read and modify the JSON
     console.log('Reading PDF structure...');
     const pdfData = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    
+    if (!pdfData || !pdfData.pages) {
+      throw new Error('Invalid PDF structure');
+    }
     
     // Log PDF structure information
     console.log(`PDF has ${pdfData.pages.length} pages`);
@@ -147,26 +164,22 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
       
       console.log(`Processing removal on page ${pageNum + 1}:`);
       console.log(`- Target area: x=${loc.x0}-${loc.x1}, y=${loc.y0}-${loc.y1}`);
+      console.log(`- Text to remove: "${loc.text}"`);
       
       // Remove content from the page's content streams
       if (page.contents) {
         page.contents.forEach((content, contentIndex) => {
           if (content.stream) {
             console.log(`- Processing content stream ${contentIndex + 1}`);
-            // Remove text operators and their operands in the specified area
-            content.stream = content.stream
-              .split('\n')
-              .filter(line => {
-                // Keep lines that don't contain text operators (Tj, TJ, etc.)
-                // or are outside our target area
-                const isTextOperator = /(Tj|TJ|BT|ET)/.test(line);
-                if (!isTextOperator) return true;
-                
-                // Complex check for position would go here
-                // For now, we're removing all text operations in the stream
-                return false;
-              })
-              .join('\n');
+            let modified = content.stream;
+            
+            // Remove text content within the specified coordinates
+            modified = modified.replace(
+              new RegExp(`(BT[\\s\\S]*?${loc.text}[\\s\\S]*?ET)`, 'g'),
+              ''
+            );
+            
+            content.stream = modified;
           }
         });
       }
