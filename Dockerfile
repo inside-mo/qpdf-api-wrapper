@@ -1,35 +1,31 @@
+# Dockerfile
 FROM node:18
 
-# Install QPDF and other tools
-RUN echo 'deb http://deb.debian.org/debian bullseye-backports main' > /etc/apt/sources.list.d/backports.list && \
-    apt-get update && \
-    apt-get install -y -t bullseye-backports qpdf && \
-    apt-get install -y \
-    ghostscript \
-    imagemagick \
-    pdftk \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# 1) Install build tools & dependencies for QPDF
+RUN apt-get update && apt-get install -y \
+    build-essential cmake git pkg-config zlib1g-dev libjpeg-dev libpng-dev libxml2-dev ca-certificates \
+  && mkdir -p /build
 
-# Configure ImageMagick policy to allow PDF operations
-RUN if [ -f /etc/ImageMagick-6/policy.xml ]; then \
-    sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml; \
-    else \
-    echo '<policymap><policy domain="coder" rights="read|write" pattern="PDF" /></policymap>' > /etc/ImageMagick-6/policy.xml; \
-    fi
+# 2) Clone & build QPDF 13.0.0 from source
+RUN cd /build \
+  && git clone --branch release-qpdf-13.0.0 https://github.com/qpdf/qpdf.git \
+  && mkdir -p qpdf/build && cd qpdf/build \
+  && cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_DOCS=OFF .. \
+  && make -j"$(nproc)" && make install \
+  && ldconfig \
+  && rm -rf /build
 
-# Set the ImageMagick resource limits
-RUN if [ -f /etc/ImageMagick-6/policy.xml ]; then \
-    sed -i 's/<policy domain="resource" name="memory" value=".*"/<policy domain="resource" name="memory" value="2GiB"/' /etc/ImageMagick-6/policy.xml; \
-    sed -i 's/<policy domain="resource" name="map" value=".*"/<policy domain="resource" name="map" value="4GiB"/' /etc/ImageMagick-6/policy.xml; \
-    sed -i 's/<policy domain="resource" name="area" value=".*"/<policy domain="resource" name="area" value="1GiB"/' /etc/ImageMagick-6/policy.xml; \
-    sed -i 's/<policy domain="resource" name="disk" value=".*"/<policy domain="resource" name="disk" value="8GiB"/' /etc/ImageMagick-6/policy.xml; \
-    fi
+# 3) Install your other PDF tools
+RUN apt-get update && apt-get install -y \
+    ghostscript imagemagick pdftk \
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# 4) App setup
 WORKDIR /app
-RUN mkdir -p /app/uploads && chmod 777 /app/uploads
+RUN mkdir -p uploads && chmod 777 uploads
 COPY package*.json ./
 RUN npm install
 COPY . .
+
 EXPOSE 1999
 CMD ["npm", "start"]
