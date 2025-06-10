@@ -138,19 +138,22 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
     
     // Handle both string and object inputs
     if (typeof req.body.locations === 'string') {
-      locations = JSON.parse(req.body.locations);
+      const parsed = JSON.parse(req.body.locations);
+      // Extract locations array from the wrapper object if present
+      locations = parsed.locations || parsed;
     } else if (typeof req.body.locations === 'object') {
-      locations = req.body.locations;
+      // Extract locations array from the wrapper object if present
+      locations = req.body.locations.locations || req.body.locations;
     } else {
       throw new Error('Invalid locations format');
     }
 
-    // If locations is a single object (not an array), wrap it in an array
-    if (locations && !Array.isArray(locations)) {
+    // Ensure locations is an array
+    if (!Array.isArray(locations)) {
       locations = [locations];
     }
 
-    console.log('Parsed locations:', locations);
+    console.log('Parsed locations for redaction:', locations);
     
   } catch (error) {
     console.error('Locations parsing error:', error);
@@ -165,8 +168,8 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
     return res.status(400).json({ error: 'No redaction areas provided' });
   }
 
-  // Get the quality parameter (limit to maximum 600 DPI to prevent memory issues)
-  let quality = req.body.quality ? parseInt(req.body.quality) : 600;
+  // Get the quality parameter (limit to maximum 600 DPI)
+  let quality = req.body.quality ? parseInt(req.body.quality) : 300;
   if (quality > 600) {
     console.log(`Requested quality ${quality} DPI is too high, limiting to 600 DPI`);
     quality = 600;
@@ -218,12 +221,21 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
         
         // Add redaction rectangles
         pageGroups[pageNum].forEach(loc => {
-          redactCmd += `-fill black -draw "rectangle ${loc.x0},${loc.y0} ${loc.x1},${loc.y1}" `;
+          // Convert PDF coordinates (origin at bottom-left) to image coordinates (origin at top-left)
+          const pageHeight = loc.page_height || 842; // Default to A4 height if not provided
+          const y0 = pageHeight - loc.y1; // Flip Y coordinates
+          const y1 = pageHeight - loc.y0;
+          
+          // Add padding to ensure complete coverage
+          const padding = 2;
+          console.log(`Redacting area: x=${loc.x0}-${loc.x1}, y=${y0}-${y1} (original y=${loc.y0}-${loc.y1})`);
+          redactCmd += `-fill black -draw "rectangle ${loc.x0-padding},${y0-padding} ${loc.x1+padding},${y1+padding}" `;
         });
         
         redactCmd += `"${imagePath}"`;
         
         // Execute redaction
+        console.log('Executing redaction command:', redactCmd);
         execSync(redactCmd);
       }
       
@@ -245,7 +257,7 @@ app.post('/redact-areas', upload.single('file'), (req, res) => {
       // Combine PDFs
       execSync(`pdftk ${pdfDir}/page-*.pdf cat output "${redactedPdf}"`);
       
-      // Final cleanup
+      // Final cleanup and metadata removal
       execSync(`qpdf --remove-restrictions --linearize "${redactedPdf}" "${outputPath}"`);
       
     } catch (error) {
@@ -315,8 +327,8 @@ app.get('/commands', (req, res) => {
         description: 'Perform LLM-proof redaction on specific areas in a PDF',
         parameters: {
           file: 'PDF file (multipart/form-data)',
-          locations: 'JSON array or object with redaction areas: {page, x0, y0, x1, y1}',
-          quality: 'Optional: DPI quality (default: 600, max: 600)'
+          locations: 'JSON array or object with redaction areas: {page, x0, y0, x1, y1, page_height}',
+          quality: 'Optional: DPI quality (default: 300, max: 600)'
         }
       }
     ]
