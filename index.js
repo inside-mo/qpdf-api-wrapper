@@ -16,6 +16,16 @@ try {
 console.log(`Node process PATH: ${process.env.PATH}`);
 // ------------------------------------
 
+const { execSync } = require('child_process');
+try {
+  const qpdfPath = execSync('which qpdf').toString().trim();
+  const qpdfVersion = execSync('qpdf --version').toString().trim();
+  console.log('[QPDF] Detected at:', qpdfPath);
+  console.log('[QPDF] Version:', qpdfVersion);
+} catch (err) {
+  console.error('[QPDF] Not found:', err);
+}
+
 const app = express();
 
 // Setup multer for file uploads
