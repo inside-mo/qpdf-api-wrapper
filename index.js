@@ -60,23 +60,23 @@ app.post('/remove-metadata', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
-  
+
   console.log('Removing metadata from:', req.file.originalname);
   const inputPath = req.file.path;
   const outputPath = `${inputPath}_cleaned.pdf`;
-  
+
   exec(`qpdf --remove-page-labels --remove-restrictions --linearize ${inputPath} ${outputPath}`, (error, stdout, stderr) => {
     if (error) {
       console.error('QPDF Error:', error);
       return res.status(500).json({ error: error.message, details: stderr });
     }
-    
+
     console.log('Successfully removed metadata');
     res.download(outputPath, `cleaned_${req.file.originalname}`, (err) => {
       if (err) {
         console.error('Download error:', err);
       }
-      
+
       setTimeout(() => {
         try {
           fs.unlinkSync(inputPath);
@@ -89,23 +89,23 @@ app.post('/remove-metadata', upload.single('file'), (req, res) => {
   });
 });
 
-// Remove specific content
+// Remove specific content with coordinate conversion
 app.post('/remove-content', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
-  
+
   let locations;
   try {
     console.log('Received locations data:', req.body.locations);
-    
+
     // Parse the locations data
     if (typeof req.body.locations === 'string') {
       locations = JSON.parse(req.body.locations);
     } else {
       locations = req.body.locations;
     }
-    
+
     // Handle both direct array and wrapped object formats
     if (!Array.isArray(locations)) {
       if (locations.locations) {
@@ -114,57 +114,66 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
         locations = [locations];
       }
     }
-    
+
     console.log('Parsed locations:', JSON.stringify(locations, null, 2));
-    
   } catch (error) {
     console.error('Locations parsing error:', error);
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: 'Invalid locations format',
       details: error.message,
       received: req.body.locations
     });
   }
-  
+
   const inputPath = req.file.path;
   const outputPath = `${inputPath}_modified.pdf`;
-  
+
   try {
     // First normalize the PDF to clean up any structural issues
     console.log('Normalizing PDF structure...');
     const normalizedPath = `${inputPath}_normalized.pdf`;
     execSync(`qpdf --normalize-content=y --compress-streams=y --decode-level=specialized "${inputPath}" "${normalizedPath}"`);
-    
+
     // Now process the content removal
     console.log('Processing content removal...');
     const workingPath = `${inputPath}_working.pdf`;
     fs.copyFileSync(normalizedPath, workingPath);
-    
+
     // Process each location
     for (const loc of locations) {
-      console.log(`Processing removal for text: "${loc.text}" on page ${loc.page + 1}`);
-      
       try {
-        // Create a page-specific redaction command
-        const pageCmd = `qpdf --modify-content "${workingPath}" --redact ${loc.page + 1},${loc.x0},${loc.y0},${loc.x1},${loc.y1} --replace-input`;
+        // Coordinate conversion: pdfplumber gives (0,0) top-left; PDF expects (0,0) bottom-left
+        const pageHeight = loc.page_height;
+        const x0 = loc.x0;
+        const x1 = loc.x1;
+        // Invert the y axis
+        const y0_pdf = pageHeight - loc.y1;
+        const y1_pdf = pageHeight - loc.y0;
+        // qpdf pages are 1-indexed
+        const pageNum = (loc.page || 0) + 1;
+
+        console.log(`Redacting "${loc.text}" on page ${pageNum}: x0=${x0}, y0=${y0_pdf}, x1=${x1}, y1=${y1_pdf}`);
+
+        // Run qpdf with redaction
+        const pageCmd = `qpdf --modify-content "${workingPath}" --redact ${pageNum},${x0},${y0_pdf},${x1},${y1_pdf} --replace-input`;
         execSync(pageCmd);
-        console.log(`Processed page ${loc.page + 1}`);
+        console.log(`Processed page ${pageNum}`);
       } catch (pageError) {
-        console.error(`Error processing page ${loc.page + 1}:`, pageError);
-        // Continue with next location
+        console.error(`Error processing redaction for text "${loc.text}" on page ${loc.page + 1}:`, pageError);
+        // Optionally, you could return here if you want to abort on first error
       }
     }
-    
+
     // Final cleanup and optimization
     console.log('Finalizing PDF...');
     execSync(`qpdf --linearize --compress-streams=y "${workingPath}" "${outputPath}"`);
-    
+
     console.log('Content removal complete');
     res.download(outputPath, `modified_${path.basename(req.file.originalname)}`, (err) => {
       if (err) {
         console.error('Download error:', err);
       }
-      
+
       // Clean up temporary files
       setTimeout(() => {
         try {
@@ -177,11 +186,11 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
         }
       }, 1000);
     });
-    
+
   } catch (error) {
     console.error('Processing error:', error);
-    return res.status(500).json({ 
-      error: 'Content removal failed', 
+    return res.status(500).json({
+      error: 'Content removal failed',
       details: error.message,
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
@@ -193,22 +202,22 @@ app.get('/check', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
-  
+
   const inputPath = req.file.path;
-  
+
   exec(`qpdf --check "${inputPath}"`, (error, stdout, stderr) => {
     const result = {
       stdout: stdout.trim(),
       stderr: stderr.trim(),
       status: error ? 'invalid' : 'valid'
     };
-    
+
     if (error && error.code !== 2) { // qpdf uses exit code 2 for warnings
       result.error = error.message;
     }
-    
+
     res.json(result);
-    
+
     fs.unlink(inputPath, (err) => {
       if (err) console.error('Cleanup error:', err);
     });
@@ -238,7 +247,7 @@ app.get('/commands', (req, res) => {
         description: 'Remove specific content from PDF',
         parameters: {
           file: 'PDF file (multipart/form-data)',
-          locations: 'JSON array of areas: [{page, text, x0, y0, x1, y1}]'
+          locations: 'JSON array of areas: [{page, text, x0, y0, x1, y1, page_height, page_width}]'
         }
       },
       {
