@@ -4,7 +4,18 @@ const { exec, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-// Initialize express app
+// ----- Startup QPDF diagnostics -----
+try {
+  const qpdfPath = execSync('which qpdf').toString().trim();
+  const qpdfVersion = execSync('qpdf --version').toString().trim();
+  console.log(`QPDF detected at: ${qpdfPath}`);
+  console.log(`QPDF version: ${qpdfVersion}`);
+} catch (e) {
+  console.error('Failed to detect qpdf:', e);
+}
+console.log(`Node process PATH: ${process.env.PATH}`);
+// ------------------------------------
+
 const app = express();
 
 // Setup multer for file uploads
@@ -42,6 +53,21 @@ app.use((req, res, next) => {
 // Health check endpoint
 app.get('/', (req, res) => {
   res.send('QPDF API is running');
+});
+
+// Quick QPDF debug endpoint
+app.get('/debug-qpdf', (req, res) => {
+  try {
+    const qpdfPath = execSync('which qpdf').toString().trim();
+    const qpdfVersion = execSync('qpdf --version').toString().trim();
+    res.json({
+      path: qpdfPath,
+      version: qpdfVersion,
+      env: process.env.PATH
+    });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
 });
 
 // Get QPDF version
@@ -162,7 +188,7 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
         if (maxX > minX && maxY > minY) {
           const pageCmd = `qpdf --modify-content "${workingPath}" --redact ${pageNum},${minX},${minY},${maxX},${maxY} --replace-input`;
           try {
-            execSync(pageCmd, {stdio: 'pipe'});
+            const cmdOutput = execSync(pageCmd, {stdio: 'pipe'});
             console.log(`Processed page ${pageNum}`);
           } catch (cmdErr) {
             console.error(`QPDF redaction error for "${loc.text}" on page ${pageNum}:`, cmdErr.stderr ? cmdErr.stderr.toString() : cmdErr);
@@ -283,4 +309,5 @@ app.listen(PORT, () => {
   console.log('- POST /remove-metadata - Remove all metadata');
   console.log('- POST /remove-content - Remove specific content');
   console.log('- POST /check - Check PDF validity');
+  console.log('- GET /debug-qpdf - Check qpdf path/version at runtime');
 });
