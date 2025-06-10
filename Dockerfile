@@ -1,12 +1,25 @@
 FROM node:18
 
-# Install required tools
+# Install QPDF from source with latest version
 RUN apt-get update && \
-    apt-get install -y \
-    qpdf \
+    apt-get install -y wget build-essential cmake zlib1g-dev libjpeg-dev curl jq && \
+    LATEST_VERSION=$(curl -s https://api.github.com/repos/qpdf/qpdf/releases/latest | jq -r .tag_name | sed 's/v//') && \
+    wget https://github.com/qpdf/qpdf/releases/download/v${LATEST_VERSION}/qpdf-${LATEST_VERSION}.tar.gz && \
+    tar xvf qpdf-${LATEST_VERSION}.tar.gz && \
+    cd qpdf-${LATEST_VERSION} && \
+    cmake . && \
+    make && \
+    make install && \
+    cd .. && \
+    rm -rf qpdf-${LATEST_VERSION}* 
+
+# Install other required tools
+RUN apt-get install -y \
     ghostscript \
     imagemagick \
     pdftk \
+    && apt-get remove -y wget build-essential curl jq \
+    && apt-get autoremove -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -25,23 +38,10 @@ RUN if [ -f /etc/ImageMagick-6/policy.xml ]; then \
     sed -i 's/<policy domain="resource" name="disk" value=".*"/<policy domain="resource" name="disk" value="8GiB"/' /etc/ImageMagick-6/policy.xml; \
     fi
 
-# Create app directory
 WORKDIR /app
-
-# Create uploads directory with proper permissions
 RUN mkdir -p /app/uploads && chmod 777 /app/uploads
-
-# Copy package files first for better caching
 COPY package*.json ./
-
-# Install dependencies
 RUN npm install
-
-# Copy application code
 COPY . .
-
-# Expose port
 EXPOSE 1999
-
-# Start the application
 CMD ["npm", "start"]
