@@ -1,4 +1,15 @@
 const express = require('express');
+
+// Ensure pdf-lib is installed
+let PDFDocument, rgb;
+try {
+  const pdfLib = require('pdf-lib');
+  PDFDocument = pdfLib.PDFDocument;
+  rgb = pdfLib.rgb;
+} catch (e) {
+  console.error('Error: pdf-lib module not found. Please run `npm install pdf-lib`');
+  process.exit(1);
+}
 const multer  = require('multer');
 const fs      = require('fs');
 const path    = require('path');
