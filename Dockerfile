@@ -1,25 +1,15 @@
 FROM node:18
 
-# Install QPDF from source with latest version
+# Install QPDF and other tools
 RUN apt-get update && \
-    apt-get install -y wget build-essential cmake zlib1g-dev libjpeg-dev curl jq && \
-    LATEST_VERSION=$(curl -s https://api.github.com/repos/qpdf/qpdf/releases/latest | jq -r .tag_name | sed 's/v//') && \
-    wget https://github.com/qpdf/qpdf/releases/download/v${LATEST_VERSION}/qpdf-${LATEST_VERSION}.tar.gz && \
-    tar xvf qpdf-${LATEST_VERSION}.tar.gz && \
-    cd qpdf-${LATEST_VERSION} && \
-    cmake . && \
-    make && \
-    make install && \
-    cd .. && \
-    rm -rf qpdf-${LATEST_VERSION}* 
-
-# Install other required tools
-RUN apt-get install -y \
+    apt-get install -y software-properties-common && \
+    add-apt-repository ppa:qpdf/qpdf && \
+    apt-get update && \
+    apt-get install -y \
+    qpdf \
     ghostscript \
     imagemagick \
     pdftk \
-    && apt-get remove -y wget build-essential curl jq \
-    && apt-get autoremove -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
