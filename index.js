@@ -1,15 +1,4 @@
 const express = require('express');
-
-// Ensure pdf-lib is installed
-let PDFDocument, rgb;
-try {
-  const pdfLib = require('pdf-lib');
-  PDFDocument = pdfLib.PDFDocument;
-  rgb = pdfLib.rgb;
-} catch (e) {
-  console.error('Error: pdf-lib module not found. Please run `npm install pdf-lib`');
-  process.exit(1);
-}
 const multer  = require('multer');
 const fs      = require('fs');
 const path    = require('path');
@@ -22,6 +11,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Multer configuration for file uploads
+typeof multer;
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, '/app/uploads/'),
   filename:    (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
@@ -31,8 +21,8 @@ const upload = multer({ storage });
 // Health check endpoint
 app.get('/', (req, res) => res.send('PDF Overlay API is running'));
 
-// Overlay black rectangles endpoint
-app.post('/overlay-black', upload.single('file'), async (req, res) => {
+// Common overlay handler
+async function overlayHandler(req, res) {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
@@ -56,17 +46,14 @@ app.post('/overlay-black', upload.single('file'), async (req, res) => {
   const outputPath = `${inputPath}_overlayed.pdf`;
 
   try {
-    // Load the existing PDF
-    const existingPdfBytes = fs.readFileSync(inputPath);
-    const pdfDoc = await PDFDocument.load(existingPdfBytes);
+    const bytes = fs.readFileSync(inputPath);
+    const pdfDoc = await PDFDocument.load(bytes);
 
-    // For each location, draw a black rectangle
-    for (const loc of locations) {
+    locations.forEach(loc => {
       const pageIndex = Number(loc.page) || 0;
       const page = pdfDoc.getPages()[pageIndex];
-      const { width, height } = page.getSize();
+      const { height } = page.getSize();
 
-      // pdf-lib uses bottom-left origin; pdfplumber uses top-left
       const x0 = Number(loc.x0);
       const x1 = Number(loc.x1);
       const y0 = height - Number(loc.y1);
@@ -74,39 +61,31 @@ app.post('/overlay-black', upload.single('file'), async (req, res) => {
 
       const rectX = Math.min(x0, x1);
       const rectY = Math.min(y0, y1);
-      const rectWidth  = Math.abs(x1 - x0);
-      const rectHeight = Math.abs(y1 - y0);
+      const rectW = Math.abs(x1 - x0);
+      const rectH = Math.abs(y1 - y0);
 
-      page.drawRectangle({
-        x: rectX,
-        y: rectY,
-        width: rectWidth,
-        height: rectHeight,
-        color: rgb(0, 0, 0),
-        opacity: 1.0,
-      });
-    }
+      page.drawRectangle({ x: rectX, y: rectY, width: rectW, height: rectH, color: rgb(0,0,0), opacity: 1.0 });
+    });
 
-    // Serialize the PDF and write to disk
     const pdfBytes = await pdfDoc.save();
     fs.writeFileSync(outputPath, pdfBytes);
 
-    // Send back the modified PDF
     res.download(outputPath, err => {
-      // Cleanup files after response
       setTimeout(() => {
-        [inputPath, outputPath].forEach(file => {
-          try { fs.unlinkSync(file); } catch {};
-        });
+        [inputPath, outputPath].forEach(f => { try { fs.unlinkSync(f); } catch {} });
       }, 1000);
     });
 
   } catch (err) {
-    console.error('Error overlaying rectangles:', err);
+    console.error('Overlay failed:', err);
     res.status(500).json({ error: 'Overlay failed', details: err.message });
   }
-});
+}
 
-// Start the server
+// Register endpoints (old + new)
+app.post('/overlay-black', upload.single('file'), overlayHandler);
+app.post('/remove-content', upload.single('file'), overlayHandler);
+
+// Start server
 const PORT = process.env.PORT || 1999;
 app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
