@@ -183,7 +183,7 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
         console.log(`Redacting "${loc.text}" on page ${pageNum}: x0=${minX}, y0=${minY}, x1=${maxX}, y1=${maxY}, pageWidth=${pageWidth}, pageHeight=${pageHeight}`);
 
         if (maxX > minX && maxY > minY) {
-          const pageCmd = `qpdf --modify-content "${workingPath}" --redact ${pageNum},${minX},${minY},${maxX},${maxY} --replace-input`;
+          const pageCmd = `/usr/bin/qpdf --modify-content ... "${workingPath}" --redact ${pageNum},${minX},${minY},${maxX},${maxY} --replace-input`;
           try {
             const cmdOutput = execSync(pageCmd, {stdio: 'pipe'});
             console.log(`Processed page ${pageNum}`);
