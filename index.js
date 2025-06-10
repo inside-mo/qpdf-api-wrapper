@@ -130,84 +130,41 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
   const outputPath = `${inputPath}_modified.pdf`;
   
   try {
-    // First verify the PDF is valid
-    console.log('Verifying PDF structure...');
-    try {
-      execSync(`qpdf --check "${inputPath}"`);
-    } catch (checkError) {
-      console.error('PDF validation failed:', checkError);
-      throw new Error('Invalid PDF file');
-    }
-
-    // Now try direct content removal without JSON conversion
-    console.log('Processing content removal...');
+    // First normalize the PDF to clean up any structural issues
+    console.log('Normalizing PDF structure...');
+    const normalizedPath = `${inputPath}_normalized.pdf`;
+    execSync(`qpdf --replace-input --normalize-content --compress-streams=y --decode-level=specialized "${inputPath}" "${normalizedPath}"`);
     
-    // Create a temporary working copy
-    const workingCopy = `${inputPath}_working.pdf`;
-    fs.copyFileSync(inputPath, workingCopy);
+    // Now process the content removal
+    console.log('Processing content removal...');
+    const workingPath = `${inputPath}_working.pdf`;
+    fs.copyFileSync(normalizedPath, workingPath);
     
     // Process each location
     for (const loc of locations) {
-      console.log(`Processing removal for text: "${loc.text}" at coordinates:`, {
-        page: loc.page,
-        x: `${loc.x0}-${loc.x1}`,
-        y: `${loc.y0}-${loc.y1}`
-      });
+      console.log(`Processing removal for text: "${loc.text}" on page ${loc.page + 1}`);
       
-      // Use qpdf's modify-content command
-      const modifyCmd = `qpdf --modify-content "${workingCopy}" --replace-stream=${loc.page + 1} "${outputPath}"`;
-      console.log('Executing command:', modifyCmd);
+      // Extract the target page
+      const pagePath = `${inputPath}_p${loc.page}.pdf`;
+      execSync(`qpdf --pages "${workingPath}" ${loc.page + 1} -- "${pagePath}"`);
       
-      try {
-        execSync(modifyCmd);
-        // If successful, update working copy for next iteration
-        fs.copyFileSync(outputPath, workingCopy);
-      } catch (modifyError) {
-        console.error('Content modification failed:', modifyError);
-        // Continue with next location
+      // Remove content from the page
+      const modifiedPagePath = `${pagePath}_modified.pdf`;
+      execSync(`qpdf --replace-input --modify-content "${pagePath}" --filtered-stream-data=replace "${modifiedPagePath}"`);
+      
+      // Merge back with the rest of the document
+      const tempPath = `${workingPath}_temp.pdf`;
+      if (loc.page === 0) {
+        execSync(`qpdf "${modifiedPagePath}" --pages . 1 "${workingPath}" 2-z -- "${tempPath}"`);
+      } else {
+        execSync(`qpdf "${workingPath}" --pages . 1-${loc.page} "${modifiedPagePath}" ${loc.page + 1} . ${loc.page + 2}-z -- "${tempPath}"`);
       }
-    }
-    
-    // Final cleanup pass
-    console.log('Performing final cleanup...');
-    const finalPath = `${inputPath}_final.pdf`;
-    execSync(`qpdf --cleanup --remove-restrictions --linearize "${workingCopy}" "${finalPath}"`);
-    
-    console.log('Content removal complete');
-    res.download(finalPath, `modified_${path.basename(req.file.originalname)}`, (err) => {
-      if (err) {
-        console.error('Download error:', err);
-      }
+      
+      // Update working copy
+      fs.copyFileSync(tempPath, workingPath);
       
       // Clean up temporary files
-      setTimeout(() => {
-        try {
-          fs.unlinkSync(inputPath);
-          if (fs.existsSync(workingCopy)) fs.unlinkSync(workingCopy);
-          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-          if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
-        } catch (e) {
-          console.error('Cleanup error:', e);
-        }
-      }, 1000);
-    });
-    
-  } catch (error) {
-    console.error('Processing error:', error);
-    // Clean up any partial files
-    try {
-      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-    } catch (e) {
-      console.error('Cleanup error:', e);
-    }
-    
-    return res.status(500).json({ 
-      error: 'Content removal failed', 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
+      fs.unlinkSync
 
 // Check PDF structure
 app.post('/check-structure', upload.single('file'), (req, res) => {
