@@ -114,6 +114,17 @@ app.post('/remove-metadata', upload.single('file'), (req, res) => {
   });
 });
 
+console.log('QPDF actual binary (ls -l):');
+try {
+  console.log(execSync('ls -l /usr/bin/qpdf').toString());
+  console.log('QPDF actual content (file):');
+  console.log(execSync('file /usr/bin/qpdf').toString());
+  console.log('QPDF version right now:');
+  console.log(execSync('/usr/bin/qpdf --version').toString());
+} catch (e) {
+  console.error('QPDF binary introspection error:', e);
+}
+
 // Remove specific content with coordinate conversion and bounds checks
 app.post('/remove-content', upload.single('file'), (req, res) => {
   if (!req.file) {
