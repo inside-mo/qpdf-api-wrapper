@@ -27,7 +27,6 @@ const storage = multer.diskStorage({
     cb(null, Date.now() + path.extname(file.originalname));
   }
 });
-
 const upload = multer({ storage: storage });
 
 // Middleware
@@ -183,9 +182,10 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
         console.log(`Redacting "${loc.text}" on page ${pageNum}: x0=${minX}, y0=${minY}, x1=${maxX}, y1=${maxY}, pageWidth=${pageWidth}, pageHeight=${pageHeight}`);
 
         if (maxX > minX && maxY > minY) {
-          const pageCmd = `/usr/bin/qpdf --modify-content ... "${workingPath}" --redact ${pageNum},${minX},${minY},${maxX},${maxY} --replace-input`;
+          const pageCmd = `/usr/bin/qpdf --modify-content "${workingPath}" --redact ${pageNum},${minX},${minY},${maxX},${maxY} --replace-input`;
+          console.log('Attempting QPDF command:', pageCmd);
           try {
-            const cmdOutput = execSync(pageCmd, {stdio: 'pipe'});
+            execSync(pageCmd, {stdio: 'pipe'});
             console.log(`Processed page ${pageNum}`);
           } catch (cmdErr) {
             console.error(`QPDF redaction error for "${loc.text}" on page ${pageNum}:`, cmdErr.stderr ? cmdErr.stderr.toString() : cmdErr);
