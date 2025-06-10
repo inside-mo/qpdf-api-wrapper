@@ -9,19 +9,14 @@ const app = express();
 
 // --- Startup diagnostics ---
 try {
-  const qpdfPath    = execSync('which qpdf').toString().trim();
-  const qpdfVersion = execSync('qpdf --version').toString().trim();
-  console.log('[startup] qpdf binary:', qpdfPath);
-  console.log('[startup] qpdf version:', qpdfVersion);
+  const bin = execSync('which qpdf').toString().trim();
+  const ver = execSync('qpdf --version').toString().trim();
+  console.log('[startup] qpdf binary:', bin);
+  console.log('[startup] qpdf version:', ver);
 
-  // Show first 20 lines of general help
-  const helpLines = execSync('qpdf --help').toString()
-    .split('\n').slice(0, 20).join('\n');
-  console.log('[startup] qpdf --help (excerpt):\n', helpLines);
-
-  // Check that modify-content is known
-  console.log('[startup] qpdf modify-content help:\n',
-    execSync('qpdf --help=topic modify-content').toString());
+  // Show if modify-content is recognized
+  console.log('[startup] qpdf modify-content topic:');
+  console.log(execSync('qpdf --help=topic modify-content').toString());
 } catch (e) {
   console.error('[startup] QPDF diagnostics failed:', e.message);
 }
@@ -38,25 +33,20 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// CORS
+// CORS & Logging
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin',  '*');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.header('Access-Control-Allow-Origin','*');
+  res.header('Access-Control-Allow-Methods','GET,POST,OPTIONS');
   res.header('Access-Control-Allow-Headers','Content-Type,Accept');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
-
-// Logging
-app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
 });
 
-// Health
+// Health check
 app.get('/', (req, res) => res.send('QPDF API is running'));
 
-// Remove specific content
+// remove-content endpoint
 app.post('/remove-content', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
@@ -70,64 +60,55 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
       locations = locations.locations || [locations];
     }
   } catch (err) {
-    return res.status(400).json({
-      error: 'Invalid locations format',
-      details: err.message
-    });
+    return res.status(400).json({ error: 'Invalid locations format', details: err.message });
   }
 
-  const inputPath   = req.file.path;
-  const workingPath = `${inputPath}_working.pdf`;
-  const outputPath  = `${inputPath}_modified.pdf`;
+  const input    = req.file.path;
+  const working  = `${input}_working.pdf`;
+  const output   = `${input}_modified.pdf`;
 
   try {
     // 1) Normalize
     console.log('Normalizing PDF…');
     execSync(`qpdf --normalize-content=y --compress-streams=y \
-               --decode-level=specialized "${inputPath}" "${workingPath}"`);
+               --decode-level=specialized "${input}" "${working}"`);
 
-    // 2) Redact each area
+    // 2) Redact each rectangle
     for (const loc of locations) {
-      const page    = (Number(loc.page) || 0) + 1;
-      const h       = Number(loc.page_height);
-      const x0      = Number(loc.x0),    x1 = Number(loc.x1);
-      const y0_pdf  = h - Number(loc.y1), y1_pdf = h - Number(loc.y0);
-      const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
-      const minY = Math.min(y0_pdf, y1_pdf), maxY = Math.max(y0_pdf, y1_pdf);
+      const page  = (Number(loc.page) || 0) + 1;
+      const H     = Number(loc.page_height);
+      const x0    = Number(loc.x0),  x1 = Number(loc.x1);
+      const y0pdf = H - Number(loc.y1), y1pdf = H - Number(loc.y0);
+      const minX = Math.min(x0,x1), maxX = Math.max(x0,x1);
+      const minY = Math.min(y0pdf,y1pdf), maxY = Math.max(y0pdf,y1pdf);
 
-      console.log(`Redacting page ${page}: [${minX},${minY},${maxX},${maxY}]`);
-      const cmd = `qpdf --modify-content "${workingPath}" \
+      const cmd = `qpdf --modify-content "${working}" \
                      --redact ${page},${minX},${minY},${maxX},${maxY} \
                      --replace-input`;
-      console.log('→', cmd);
+      console.log('Executing:', cmd);
       execSync(cmd, { stdio: 'pipe' });
     }
 
     // 3) Final linearize
-    console.log('Final linearize & write output…');
-    execSync(`qpdf --linearize --compress-streams=y \
-               "${workingPath}" "${outputPath}"`);
+    console.log('Final linearize…');
+    execSync(`qpdf --linearize --compress-streams=y "${working}" "${output}"`);
 
-    res.download(outputPath, err => {
-      // Cleanup after
+    // Send back
+    res.download(output, () => {
+      // Cleanup after short delay
       setTimeout(() => {
-        [ inputPath, workingPath, outputPath ].forEach(f => {
-          try { fs.unlinkSync(f); } catch {}
+        [input, working, output].forEach(f => {
+          try { fs.unlinkSync(f); } catch {} 
         });
       }, 1000);
     });
 
-  } catch (error) {
-    console.error('Redaction failed:', error);
-    return res.status(500).json({
-      error: 'Redaction failed',
-      details: error.message
-    });
+  } catch (err) {
+    console.error('Redaction failed:', err.message);
+    return res.status(500).json({ error: 'Redaction failed', details: err.message });
   }
 });
 
-// Start
+// Start server
 const PORT = process.env.PORT || 1999;
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
