@@ -133,7 +133,7 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
     // First normalize the PDF to clean up any structural issues
     console.log('Normalizing PDF structure...');
     const normalizedPath = `${inputPath}_normalized.pdf`;
-    execSync(`qpdf --normalize-content --compress-streams=y --decode-level=specialized "${inputPath}" "${normalizedPath}"`);
+    execSync(`qpdf --normalize-content=y --compress-streams=y --decode-level=specialized "${inputPath}" "${normalizedPath}"`);
     
     // Now process the content removal
     console.log('Processing content removal...');
