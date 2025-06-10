@@ -65,7 +65,7 @@ app.post('/remove-metadata', upload.single('file'), (req, res) => {
   const inputPath = req.file.path;
   const outputPath = `${inputPath}_cleaned.pdf`;
   
-  exec(`qpdf --remove-page-labels --remove-restrictions --linearize --remove-all-page-piece-dictionaries --qdf ${inputPath} ${outputPath}`, (error, stdout, stderr) => {
+  exec(`qpdf --remove-page-labels --remove-restrictions --linearize ${inputPath} ${outputPath}`, (error, stdout, stderr) => {
     if (error) {
       console.error('QPDF Error:', error);
       return res.status(500).json({ error: error.message, details: stderr });
@@ -133,7 +133,7 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
     // First normalize the PDF to clean up any structural issues
     console.log('Normalizing PDF structure...');
     const normalizedPath = `${inputPath}_normalized.pdf`;
-    execSync(`qpdf --replace-input --normalize-content --compress-streams=y --decode-level=specialized "${inputPath}" "${normalizedPath}"`);
+    execSync(`qpdf --normalize-content --compress-streams=y --decode-level=specialized "${inputPath}" "${normalizedPath}"`);
     
     // Now process the content removal
     console.log('Processing content removal...');
@@ -144,30 +144,52 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
     for (const loc of locations) {
       console.log(`Processing removal for text: "${loc.text}" on page ${loc.page + 1}`);
       
-      // Extract the target page
-      const pagePath = `${inputPath}_p${loc.page}.pdf`;
-      execSync(`qpdf --pages "${workingPath}" ${loc.page + 1} -- "${pagePath}"`);
-      
-      // Remove content from the page
-      const modifiedPagePath = `${pagePath}_modified.pdf`;
-      execSync(`qpdf --replace-input --modify-content "${pagePath}" --filtered-stream-data=replace "${modifiedPagePath}"`);
-      
-      // Merge back with the rest of the document
-      const tempPath = `${workingPath}_temp.pdf`;
-      if (loc.page === 0) {
-        execSync(`qpdf "${modifiedPagePath}" --pages . 1 "${workingPath}" 2-z -- "${tempPath}"`);
-      } else {
-        execSync(`qpdf "${workingPath}" --pages . 1-${loc.page} "${modifiedPagePath}" ${loc.page + 1} . ${loc.page + 2}-z -- "${tempPath}"`);
+      try {
+        // Create a page-specific redaction command
+        const pageCmd = `qpdf --modify-content "${workingPath}" --redact ${loc.page + 1},${loc.x0},${loc.y0},${loc.x1},${loc.y1} --replace-input`;
+        execSync(pageCmd);
+        console.log(`Processed page ${loc.page + 1}`);
+      } catch (pageError) {
+        console.error(`Error processing page ${loc.page + 1}:`, pageError);
+        // Continue with next location
+      }
+    }
+    
+    // Final cleanup and optimization
+    console.log('Finalizing PDF...');
+    execSync(`qpdf --linearize --compress-streams=y "${workingPath}" "${outputPath}"`);
+    
+    console.log('Content removal complete');
+    res.download(outputPath, `modified_${path.basename(req.file.originalname)}`, (err) => {
+      if (err) {
+        console.error('Download error:', err);
       }
       
-      // Update working copy
-      fs.copyFileSync(tempPath, workingPath);
-      
       // Clean up temporary files
-      fs.unlinkSync
+      setTimeout(() => {
+        try {
+          fs.unlinkSync(inputPath);
+          fs.unlinkSync(normalizedPath);
+          fs.unlinkSync(workingPath);
+          fs.unlinkSync(outputPath);
+        } catch (e) {
+          console.error('Cleanup error:', e);
+        }
+      }, 1000);
+    });
+    
+  } catch (error) {
+    console.error('Processing error:', error);
+    return res.status(500).json({ 
+      error: 'Content removal failed', 
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
 
 // Check PDF structure
-app.post('/check-structure', upload.single('file'), (req, res) => {
+app.get('/check', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
@@ -216,11 +238,11 @@ app.get('/commands', (req, res) => {
         description: 'Remove specific content from PDF',
         parameters: {
           file: 'PDF file (multipart/form-data)',
-          locations: 'JSON array of areas: [{page, x0, y0, x1, y1}]'
+          locations: 'JSON array of areas: [{page, text, x0, y0, x1, y1}]'
         }
       },
       {
-        path: '/check-structure',
+        path: '/check',
         method: 'POST',
         description: 'Check PDF structure and validity',
         parameters: {
@@ -240,5 +262,5 @@ app.listen(PORT, () => {
   console.log('- GET /commands - List available commands');
   console.log('- POST /remove-metadata - Remove all metadata');
   console.log('- POST /remove-content - Remove specific content');
-  console.log('- POST /check-structure - Check PDF validity');
+  console.log('- POST /check - Check PDF validity');
 });
