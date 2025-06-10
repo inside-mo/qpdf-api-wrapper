@@ -1,27 +1,47 @@
-FROM python:3.9-slim
+FROM node:18
 
+# Install required tools
+RUN apt-get update && \
+    apt-get install -y \
+    qpdf \
+    ghostscript \
+    imagemagick \
+    pdftk \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure ImageMagick policy to allow PDF operations
+RUN if [ -f /etc/ImageMagick-6/policy.xml ]; then \
+    sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml; \
+    else \
+    echo '<policymap><policy domain="coder" rights="read|write" pattern="PDF" /></policymap>' > /etc/ImageMagick-6/policy.xml; \
+    fi
+
+# Set the ImageMagick resource limits
+RUN if [ -f /etc/ImageMagick-6/policy.xml ]; then \
+    sed -i 's/<policy domain="resource" name="memory" value=".*"/<policy domain="resource" name="memory" value="2GiB"/' /etc/ImageMagick-6/policy.xml; \
+    sed -i 's/<policy domain="resource" name="map" value=".*"/<policy domain="resource" name="map" value="4GiB"/' /etc/ImageMagick-6/policy.xml; \
+    sed -i 's/<policy domain="resource" name="area" value=".*"/<policy domain="resource" name="area" value="1GiB"/' /etc/ImageMagick-6/policy.xml; \
+    sed -i 's/<policy domain="resource" name="disk" value=".*"/<policy domain="resource" name="disk" value="8GiB"/' /etc/ImageMagick-6/policy.xml; \
+    fi
+
+# Create app directory
 WORKDIR /app
 
-# Install git to clone the repository
-RUN apt-get update && apt-get install -y git && apt-get clean
+# Create uploads directory with proper permissions
+RUN mkdir -p /app/uploads && chmod 777 /app/uploads
 
-# Copy requirements first for better caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy package files first for better caching
+COPY package*.json ./
 
-# Clone the original OMRChecker repo
-RUN git clone https://github.com/Udayraj123/OMRChecker.git
+# Install dependencies
+RUN npm install
 
-# Create a patched version of the problematic file
-RUN sed -i 's/from src.logger import logger/from .logger import logger/g' /app/OMRChecker/src/__init__.py
-
-# Copy your application files
+# Copy application code
 COPY . .
 
-# Add both the current directory and the OMRChecker directory to PYTHONPATH
-ENV PYTHONPATH="${PYTHONPATH}:/app:/app/OMRChecker"
+# Expose port
+EXPOSE 1999
 
-# Expose port 8000 to match Coolify's default
-EXPOSE 8000
-
-CMD ["python", "app.py"]
+# Start the application
+CMD ["npm", "start"]
