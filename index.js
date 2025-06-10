@@ -89,7 +89,7 @@ app.post('/remove-metadata', upload.single('file'), (req, res) => {
   });
 });
 
-// Remove specific content with coordinate conversion
+// Remove specific content with coordinate conversion and bounds checks
 app.post('/remove-content', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
@@ -142,25 +142,36 @@ app.post('/remove-content', upload.single('file'), (req, res) => {
     // Process each location
     for (const loc of locations) {
       try {
-        // Coordinate conversion: pdfplumber gives (0,0) top-left; PDF expects (0,0) bottom-left
-        const pageHeight = loc.page_height;
-        const x0 = loc.x0;
-        const x1 = loc.x1;
-        // Invert the y axis
-        const y0_pdf = pageHeight - loc.y1;
-        const y1_pdf = pageHeight - loc.y0;
-        // qpdf pages are 1-indexed
-        const pageNum = (loc.page || 0) + 1;
+        const pageHeight = Number(loc.page_height);
+        const pageWidth = Number(loc.page_width);
+        const x0 = Number(loc.x0);
+        const x1 = Number(loc.x1);
+        // Invert the y axis: PDF (0,0) is bottom-left, pdfplumber (0,0) is top-left
+        const y0_pdf = pageHeight - Number(loc.y1);
+        const y1_pdf = pageHeight - Number(loc.y0);
+        const pageNum = (Number(loc.page) || 0) + 1;
 
-        console.log(`Redacting "${loc.text}" on page ${pageNum}: x0=${x0}, y0=${y0_pdf}, x1=${x1}, y1=${y1_pdf}`);
+        // Ensure valid numbers and bounds
+        const minX = Math.max(0, Math.min(x0, x1));
+        const maxX = Math.min(pageWidth, Math.max(x0, x1));
+        const minY = Math.max(0, Math.min(y0_pdf, y1_pdf));
+        const maxY = Math.min(pageHeight, Math.max(y0_pdf, y1_pdf));
 
-        // Run qpdf with redaction
-        const pageCmd = `qpdf --modify-content "${workingPath}" --redact ${pageNum},${x0},${y0_pdf},${x1},${y1_pdf} --replace-input`;
-        execSync(pageCmd);
-        console.log(`Processed page ${pageNum}`);
+        console.log(`Redacting "${loc.text}" on page ${pageNum}: x0=${minX}, y0=${minY}, x1=${maxX}, y1=${maxY}, pageWidth=${pageWidth}, pageHeight=${pageHeight}`);
+
+        if (maxX > minX && maxY > minY) {
+          const pageCmd = `qpdf --modify-content "${workingPath}" --redact ${pageNum},${minX},${minY},${maxX},${maxY} --replace-input`;
+          try {
+            execSync(pageCmd, {stdio: 'pipe'});
+            console.log(`Processed page ${pageNum}`);
+          } catch (cmdErr) {
+            console.error(`QPDF redaction error for "${loc.text}" on page ${pageNum}:`, cmdErr.stderr ? cmdErr.stderr.toString() : cmdErr);
+          }
+        } else {
+          console.warn(`Skipping invalid rectangle for "${loc.text}" on page ${pageNum}: minX=${minX}, minY=${minY}, maxX=${maxX}, maxY=${maxY}`);
+        }
       } catch (pageError) {
         console.error(`Error processing redaction for text "${loc.text}" on page ${loc.page + 1}:`, pageError);
-        // Optionally, you could return here if you want to abort on first error
       }
     }
 
